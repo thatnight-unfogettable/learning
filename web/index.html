@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>刷题记录本</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%9D%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <span class="logo">📝</span>
+        <div>
+          <h1>刷题记录本</h1>
+          <p>记录每一道题的成长</p>
+        </div>
+      </div>
+      <button id="btn-add" class="btn btn-primary">＋ 添加题目</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="stats" class="stats"></section>
+
+    <section class="toolbar card">
+      <input id="search" type="search" placeholder="搜索：题名 / 题号 / 标签 / 卡壳点 / 代码…" />
+      <input id="f-platform" list="platform-list" placeholder="全部平台" />
+      <datalist id="platform-list">
+        <option value="洛谷"></option>
+        <option value="Matrix"></option>
+      </datalist>
+      <select id="f-status">
+        <option value="">全部状态</option>
+        <option value="已通过">已通过</option>
+        <option value="进行中">进行中</option>
+        <option value="待重做">待重做</option>
+      </select>
+      <select id="f-tag"><option value="">全部标签</option></select>
+      <button id="btn-clear" class="btn btn-ghost" type="button">清空筛选</button>
+    </section>
+
+    <section id="list" class="list"></section>
+  </main>
+
+  <div id="modal-view" class="modal hidden">
+    <div class="modal-mask" data-close></div>
+    <div class="dialog dialog-view">
+      <button class="dialog-close" data-close>×</button>
+      <div id="view-body" class="dialog-body"></div>
+    </div>
+  </div>
+
+  <div id="modal-form" class="modal hidden">
+    <div class="modal-mask" data-close></div>
+    <div class="dialog dialog-form">
+      <button class="dialog-close" data-close>×</button>
+      <div class="dialog-head"><h2 id="form-title">添加题目</h2></div>
+      <form id="form">
+        <div class="form-grid">
+          <label>平台
+            <input id="f-platform-select" list="platform-form-list" placeholder="可手动输入，如洛谷、Matrix" />
+            <datalist id="platform-form-list">
+              <option value="洛谷"></option>
+              <option value="Matrix"></option>
+            </datalist>
+          </label>
+          <label>题号 <span class="opt">（选填）</span>
+            <div class="pid-row">
+              <input id="f-pid" placeholder="如 P1085，洛谷题号可自动获取" />
+              <button type="button" id="btn-fetch-luogu" class="btn btn-ghost btn-sm" title="从洛谷获取题名和难度">🔄</button>
+            </div>
+            <span id="pid-status" class="pid-status"></span>
+          </label>
+          <label>难度 <span class="opt">（选填）</span>
+            <input id="f-diff" list="diff-list" placeholder="如 普及− / 简单" />
+            <datalist id="diff-list">
+              <option value="入门"></option>
+              <option value="普及−"></option>
+              <option value="普及/提高−"></option>
+              <option value="普及+/提高"></option>
+              <option value="提高+/省选−"></option>
+              <option value="省选/NOI−"></option>
+              <option value="NOI/NOI+/CTSC"></option>
+              <option value="简单"></option>
+              <option value="中等"></option>
+              <option value="困难"></option>
+            </datalist>
+          </label>
+          <label>日期
+            <input id="f-date" type="date" />
+          </label>
+          <label>状态
+            <select id="f-status-select">
+              <option value="已通过">已通过</option>
+              <option value="进行中">进行中</option>
+              <option value="待重做">待重做</option>
+            </select>
+          </label>
+          <label class="full">题名 <span class="req">（必填）</span>
+            <input id="f-title" placeholder="题目名称" />
+          </label>
+          <label class="full">知识点标签 <span class="opt">（选填，逗号分隔）</span>
+            <input id="f-tags" placeholder="如：递归, 前缀和, 指针" />
+          </label>
+          <label class="full">题目描述 <span class="opt">（选填，洛谷题号可自动获取）</span>
+            <textarea id="f-desc" rows="5" placeholder="自动获取或手动粘贴题目描述（支持字符画等原文格式）…"></textarea>
+          </label>
+          <label class="full">粘贴代码 <span class="opt">（选填）</span>
+            <textarea id="f-code" rows="7" class="mono" spellcheck="false" placeholder="直接粘贴你的 AC 代码…"></textarea>
+          </label>
+          <label class="full">代码文件路径 <span class="opt">（选填，与粘贴代码可都填）</span>
+            <input id="f-codepath" class="mono" placeholder="如 D:\OJ\luogu\P1001.c" />
+          </label>
+        </div>
+        <div class="notes-editor">
+          <div class="notes-head">
+            <h3>卡壳点 → 解决办法 <span class="opt">（选填，可多条）</span></h3>
+            <button type="button" id="btn-add-note" class="btn btn-ghost btn-sm">＋ 添加一条</button>
+          </div>
+          <div id="f-notes"></div>
+        </div>
+        <div class="notes-editor">
+          <div class="notes-head">
+            <h3>更优解 / 其他解法 <span class="opt">（选填，可多条）</span></h3>
+            <button type="button" id="btn-add-better" class="btn btn-ghost btn-sm">＋ 添加一条</button>
+          </div>
+          <div id="f-better"></div>
+        </div>
+        <div class="form-foot">
+          <button type="button" class="btn btn-ghost" data-close>取消</button>
+          <button type="submit" class="btn btn-primary">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="file-guard" class="file-guard hidden">
+    <div class="file-guard-box">
+      <div class="big">🚫</div>
+      <h2>请不要直接打开 index.html</h2>
+      <p>这个程序需要后台服务才能读写数据。<br />请双击程序文件夹里的「<b>启动刷题记录本.bat</b>」启动，<br />浏览器会自动打开正确地址（一般是 http://127.0.0.1:8765）。</p>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+[
+  {
+    "platform": "洛谷",
+    "pid": "",
+    "title": "不高兴的津津",
+    "difficulty": "入门",
+    "tags": [],
+    "date": "2026-09-17",
+    "status": "已通过",
+    "codeText": "#include<stdio.h>\nint main(){\n    int school[8];\n    int mom[8];\n    int happy[8];\n    int a=0;\n    int b=0;\n    int c=0;\n    for(int q=1;q<=7;q++){\n        happy[q]=0;\n    }\n    for(int i=1;i<=7;i++){\n        scanf(\"%d %d\",&school[i],&mom[i]);\n        if(school[i]+mom[i]>8){\n            happy[i]=1;\n            \n        }\n        a+=happy[i];\n        if(school[i]+mom[i]>b){\n            b=school[i]+mom[i];\n                c=i;\n        }\n    }\n    if(a==0){\n        printf(\"%d\",a);\n    }\n    if(a!=0){\n        printf(\"%d\",c);\n    }\n    return 0;\n}",
+    "codePath": "",
+    "notes": [
+      {
+        "problem": "zuidazhi",
+        "solution": "nicai"
+      }
+    ],
+    "betterSolutions": [],
+    "id": 1,
+    "createdAt": "2026-09-17 13:33",
+    "updatedAt": "2026-09-17 13:34"
+  }
+]
