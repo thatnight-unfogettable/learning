@@ -105,6 +105,11 @@
             <input id="f-tags" placeholder="如：递归, 前缀和, 指针" />
           </label>
           <label class="full">题目描述 <span class="opt">（选填，洛谷题号可自动获取）</span>
+            <div class="desc-toolbar">
+              <button type="button" id="btn-insert-image" class="btn btn-ghost btn-sm" title="插入图片">🖼️ 插入图片</button>
+              <input type="file" id="f-desc-image" accept="image/*" hidden />
+              <span class="hint">支持直接粘贴截图</span>
+            </div>
             <textarea id="f-desc" rows="5" placeholder="自动获取或手动粘贴题目描述（支持字符画等原文格式）…"></textarea>
           </label>
           <label class="full">粘贴代码 <span class="opt">（选填）</span>

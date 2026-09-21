@@ -31,6 +31,8 @@ const els = {
   toast: document.getElementById("toast"),
   btnFetchLuogu: document.getElementById("btn-fetch-luogu"),
   pidStatus: document.getElementById("pid-status"),
+  btnInsertImage: document.getElementById("btn-insert-image"),
+  descImageInput: document.getElementById("f-desc-image"),
 };
 
 const formFields = {
@@ -267,7 +269,7 @@ function viewRecord(id) {
       .map(([k, v]) => `<div class="vmeta"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`)
       .join("")}</div>
     ${r.tags && r.tags.length ? `<div class="rec-tags view-tags">${r.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : ""}
-    ${(r.description && r.description.trim()) ? `<div class="detail-section"><h3>📄 题目描述</h3><div class="desc-block">${esc(r.description)}</div></div>` : ""}
+    ${(r.description && r.description.trim()) ? `<div class="detail-section"><h3>📄 题目描述</h3><div class="desc-block">${renderDescription(r.description)}</div></div>` : ""}
     <div class="detail-section"><h3>📝 卡壳点 → 解决办法</h3>${notesHtml(r)}</div>
     ${
       hasCode
@@ -339,6 +341,7 @@ function openForm(record) {
   formFields.codeText.value = record ? record.codeText || "" : "";
   formFields.codePath.value = record ? record.codePath || "" : "";
   formFields.description.value = record ? record.description || "" : "";
+  updateLuoguUI();
   els.notesBox.innerHTML = "";
   const notes = record && record.notes && record.notes.length ? record.notes : [{ problem: "", solution: "" }];
   notes.forEach((n) => addNoteRow(n.problem, n.solution));
@@ -378,6 +381,59 @@ function collectForm() {
   };
 }
 
+
+function isLuoguPlatform() {
+  return formFields.platform.value.trim() === "洛谷";
+}
+
+function updateLuoguUI() {
+  const luogu = isLuoguPlatform();
+  if (els.btnFetchLuogu) els.btnFetchLuogu.style.display = luogu ? "" : "none";
+  formFields.pid.placeholder = luogu ? "如 P1085，输入后自动获取题名" : "题号（选填）";
+  if (!luogu) {
+    els.pidStatus.textContent = "";
+    els.pidStatus.className = "pid-status";
+  }
+}
+
+function renderDescription(text) {
+  if (!text) return "";
+  let html = "";
+  let last = 0;
+  const re = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    html += esc(text.slice(last, m.index)).replace(/\n/g, "<br>");
+    html += `<img alt="${esc(m[1])}" src="${esc(m[2])}" />`;
+    last = m.index + m[0].length;
+  }
+  html += esc(text.slice(last)).replace(/\n/g, "<br>");
+  return html;
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function insertImageMarkdown(url, alt) {
+  const t = formFields.description;
+  const altText = String(alt || "图片").replace(/[[\]]/g, "");
+  const insert = `![${altText}](${url})`;
+  const start = t.selectionStart || 0;
+  const end = t.selectionEnd || 0;
+  const before = t.value.slice(0, start);
+  const after = t.value.slice(end);
+  const sepBefore = before && !before.endsWith("\n") && before.trim() ? "\n" : "";
+  t.value = before + sepBefore + insert + "\n" + after;
+  const pos = start + sepBefore.length + insert.length + 1;
+  t.selectionStart = t.selectionEnd = pos;
+  t.focus();
+}
 function parseLuoguPid(text) {
   const value = String(text || "").trim();
   if (!value) return null;
@@ -464,16 +520,18 @@ function bindEvents() {
     }
     fetchLuoguInfo(pid);
   });
+  formFields.platform.addEventListener("input", updateLuoguUI);
+  formFields.platform.addEventListener("change", updateLuoguUI);
   formFields.pid.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
       const pid = parseLuoguPid(formFields.pid.value);
-      if (pid) fetchLuoguInfo(pid);
+      if (pid && isLuoguPlatform()) fetchLuoguInfo(pid);
     }
   });
   formFields.pid.addEventListener("change", () => {
     const pid = parseLuoguPid(formFields.pid.value);
-    if (pid && !formFields.title.value.trim()) fetchLuoguInfo(pid);
+    if (pid && !formFields.title.value.trim() && isLuoguPlatform()) fetchLuoguInfo(pid);
   });
   els.list.addEventListener("click", (e) => {
     const card = e.target.closest(".rec");
@@ -515,6 +573,40 @@ function bindEvents() {
       if (modal) closeModal(modal);
     })
   );
+  if (els.btnInsertImage && els.descImageInput) {
+    els.btnInsertImage.addEventListener("click", () => els.descImageInput.click());
+    els.descImageInput.addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const dataUrl = await readFileAsDataURL(file);
+        insertImageMarkdown(dataUrl, file.name);
+      } catch {
+        showToast("读取图片失败");
+      }
+      e.target.value = "";
+    });
+  }
+  formFields.description.addEventListener("paste", (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const imageFiles = [];
+    for (const item of items) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (!imageFiles.length) return;
+    e.preventDefault();
+    imageFiles.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => insertImageMarkdown(reader.result, file.name);
+      reader.onerror = () => showToast("粘贴图片失败");
+      reader.readAsDataURL(file);
+    });
+  });
+
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       [els.modalView, els.modalForm].forEach((m) => {
