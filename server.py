@@ -8,6 +8,8 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import base64
+import uuid
 import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,8 +18,9 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
 DATA_FILE = BASE_DIR / "data.json"
+IMAGES_DIR = BASE_DIR / "images"
 LOCK = threading.Lock()
-MAX_BODY = 10 * 1024 * 1024
+MAX_BODY = 50 * 1024 * 1024
 
 MIME_OVERRIDES = {
     ".html": "text/html; charset=utf-8",
@@ -181,6 +184,39 @@ def problem_info(problem, pid):
     return {"platform": "洛谷", "pid": pid, "title": title, "difficulty": difficulty, "description": description}
 
 
+
+
+def _ensure_images_dir():
+    IMAGES_DIR.mkdir(exist_ok=True)
+
+
+def _parse_image_data(data):
+    """支持 data:image/xxx;base64,... 或纯 base64 字符串，默认 image/png。"""
+    text = str(data or "").strip()
+    match = re.match(r"^data:(?P<mime>[\w/+-]+);base64,(?P<b64>.*)$", text, re.S)
+    if match:
+        mime = match.group("mime")
+        b64 = match.group("b64")
+    else:
+        mime = "image/png"
+        b64 = text
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except Exception:
+        return None
+    return mime, raw
+
+
+def _save_image(mime, raw):
+    _ensure_images_dir()
+    ext = mimetypes.guess_extension(mime) or ".bin"
+    if ext == ".jpe":
+        ext = ".jpg"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    file_path = IMAGES_DIR / filename
+    file_path.write_bytes(raw)
+    return f"/images/{filename}"
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -237,13 +273,42 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "luogu_failed", "message": error}, 502)
                 return
             self._send_json(info)
+        elif path.startswith("/images/"):
+            rel_path = path[len("/images/"):].lstrip("/")
+            file_path = (IMAGES_DIR / rel_path).resolve()
+            if "/" in rel_path or "\\" in rel_path or not file_path.is_relative_to(IMAGES_DIR.resolve()) or not file_path.is_file():
+                self._send_json({"error": "not found"}, 404)
+                return
+            mime = MIME_OVERRIDES.get(file_path.suffix.lower()) or (
+                mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            )
+            body = file_path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
         elif path.startswith("/api/"):
             self._send_json({"error": "not found"}, 404)
         else:
             self._serve_static(path)
 
     def do_POST(self):
-        if self.path.split("?", 1)[0] != "/api/records":
+        path = self.path.split("?", 1)[0]
+        if path == "/api/images":
+            data = self._read_json()
+            if not data or not data.get("data"):
+                self._send_json({"error": "bad_request", "message": "缺少图片数据"}, 400)
+                return
+            parsed = _parse_image_data(data["data"])
+            if not parsed:
+                self._send_json({"error": "invalid_image", "message": "无法解析图片数据"}, 400)
+                return
+            url = _save_image(*parsed)
+            self._send_json({"url": url})
+            return
+        if path != "/api/records":
             self._send_json({"error": "not found"}, 404)
             return
         data = self._read_json()

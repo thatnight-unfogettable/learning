@@ -1,1 +1,4 @@
 # Python\n__pycache__/\n*.pyc\n*.pyo\n*.pyd\n\n# Logs\n*.log\n\n# OS\n.DS_Store\nThumbs.db\n
+# Uploaded images
+images/
+

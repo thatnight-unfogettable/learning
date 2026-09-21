@@ -573,6 +573,21 @@ function bindEvents() {
       if (modal) closeModal(modal);
     })
   );
+  async function uploadImage(dataUrl, alt) {
+    try {
+      const res = await fetch("/api/images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: dataUrl }),
+      });
+      if (!res.ok) throw new Error("上传失败");
+      const { url } = await res.json();
+      insertImageMarkdown(url, alt);
+    } catch (err) {
+      showToast("图片上传失败，请重试");
+    }
+  }
+
   if (els.btnInsertImage && els.descImageInput) {
     els.btnInsertImage.addEventListener("click", () => els.descImageInput.click());
     els.descImageInput.addEventListener("change", async (e) => {
@@ -580,7 +595,7 @@ function bindEvents() {
       if (!file) return;
       try {
         const dataUrl = await readFileAsDataURL(file);
-        insertImageMarkdown(dataUrl, file.name);
+        await uploadImage(dataUrl, file.name);
       } catch {
         showToast("读取图片失败");
       }
@@ -588,23 +603,34 @@ function bindEvents() {
     });
   }
   formFields.description.addEventListener("paste", (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
+    const cd = e.clipboardData;
+    if (!cd) return;
+
+    // 优先处理剪贴板里的图片文件
     const imageFiles = [];
-    for (const item of items) {
+    for (const item of cd.items) {
       if (item.kind === "file" && item.type.startsWith("image/")) {
         const file = item.getAsFile();
         if (file) imageFiles.push(file);
       }
     }
-    if (!imageFiles.length) return;
-    e.preventDefault();
-    imageFiles.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => insertImageMarkdown(reader.result, file.name);
-      reader.onerror = () => showToast("粘贴图片失败");
-      reader.readAsDataURL(file);
-    });
+    if (imageFiles.length) {
+      e.preventDefault();
+      imageFiles.forEach((file) => {
+        const reader = new FileReader();
+        reader.onload = () => uploadImage(reader.result, file.name);
+        reader.onerror = () => showToast("粘贴图片失败");
+        reader.readAsDataURL(file);
+      });
+      return;
+    }
+
+    // 处理纯文本形式的 base64 / data URL
+    const text = cd.getData("text/plain") || "";
+    if (/^data:image\/\w+;base64,/i.test(text) || /^[A-Za-z0-9+/=]{100,}$/.test(text.trim())) {
+      e.preventDefault();
+      uploadImage(text.trim(), "粘贴图片");
+    }
   });
 
   document.addEventListener("keydown", (e) => {
