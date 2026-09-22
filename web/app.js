@@ -559,12 +559,16 @@ function bindEvents() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("save failed");
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("保存失败", res.status, errText);
+        throw new Error(errText || "save failed");
+      }
       closeModal(els.modalForm);
       showToast(editingId ? "已保存修改 ✓" : "添加成功 ✓");
       await refresh();
-    } catch {
-      showToast("保存失败，请重试");
+    } catch (err) {
+      showToast("保存失败：" + (err.message || "请重试"));
     }
   });
   document.querySelectorAll("[data-close]").forEach((el) =>

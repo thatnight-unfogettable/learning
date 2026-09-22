@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 import base64
 import uuid
+import tempfile
 import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,8 +18,42 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
-DATA_FILE = BASE_DIR / "data.json"
-IMAGES_DIR = BASE_DIR / "images"
+
+
+def _get_data_dir():
+    """允许通过 DATA_DIR 指定数据目录；若项目目录不可写则使用系统临时目录。"""
+    env = os.environ.get("DATA_DIR", "").strip()
+    if env:
+        return Path(env)
+    if os.access(BASE_DIR, os.W_OK):
+        return BASE_DIR
+    return Path(tempfile.gettempdir()) / "shuati"
+
+
+DATA_DIR = _get_data_dir()
+DATA_FILE = DATA_DIR / "data.json"
+IMAGES_DIR = DATA_DIR / "images"
+
+
+def _ensure_data_dir():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _migrate_data_file():
+    """只读环境启动时，把项目目录里的 data.json 复制到可写目录。"""
+    if DATA_FILE.exists():
+        return
+    base_file = BASE_DIR / "data.json"
+    if not base_file.exists():
+        return
+    try:
+        _ensure_data_dir()
+        DATA_FILE.write_text(base_file.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError:
+        pass
+
+
+_migrate_data_file()
 LOCK = threading.Lock()
 MAX_BODY = 50 * 1024 * 1024
 
@@ -45,6 +80,7 @@ def load_records():
 
 
 def save_records(records):
+    _ensure_data_dir()
     tmp_file = DATA_FILE.with_name(DATA_FILE.name + ".tmp")
     with open(tmp_file, "w", encoding="utf-8") as file:
         json.dump(records, file, ensure_ascii=False, indent=2)
@@ -187,7 +223,7 @@ def problem_info(problem, pid):
 
 
 def _ensure_images_dir():
-    IMAGES_DIR.mkdir(exist_ok=True)
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _parse_image_data(data):
@@ -220,6 +256,20 @@ def _save_image(mime, raw):
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
+
+    def handle(self):
+        try:
+            super().handle()
+        except Exception as exc:
+            try:
+                body = json.dumps({"error": "internal_error", "message": str(exc)}, ensure_ascii=False).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                pass
 
     def _send_json(self, data, code=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
