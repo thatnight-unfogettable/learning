@@ -9,6 +9,7 @@ const state = {
 
 let editingId = null;
 let toastTimer = null;
+const DRAFT_KEY = "shuati.draft";
 
 const els = {
   stats: document.getElementById("stats"),
@@ -46,6 +47,11 @@ const formFields = {
   codeText: document.getElementById("f-code"),
   codePath: document.getElementById("f-codepath"),
   description: document.getElementById("f-desc"),
+  draftBanner: document.getElementById("draft-banner"),
+  draftWhen: document.getElementById("draft-when"),
+  draftRetry: document.getElementById("draft-retry"),
+  draftRestore: document.getElementById("draft-restore"),
+  draftDiscard: document.getElementById("draft-discard"),
 };
 
 function esc(value) {
@@ -76,11 +82,67 @@ function statusBadge(status) {
   return `<span class="badge ${cls}">${esc(status || "未填")}</span>`;
 }
 
-function showToast(msg) {
+function showToast(msg, ms = 2000, isError = false) {
   els.toast.textContent = msg;
+  els.toast.classList.toggle("err", Boolean(isError));
   els.toast.classList.remove("hidden");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => els.toast.classList.add("hidden"), 2000);
+  toastTimer = setTimeout(() => els.toast.classList.add("hidden"), ms);
+}
+
+function readDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(data, id, reason) {
+  try {
+    localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({ data, id: id ?? null, reason: reason || "", at: new Date().toISOString() })
+    );
+  } catch {
+    /* 浏览器不让存就算了，至少页面上有醒目提示 */
+  }
+}
+
+function clearDraft() {
+  try {
+    localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* ignore */
+  }
+  if (els.draftBanner) els.draftBanner.classList.add("hidden");
+}
+
+function showDraftBanner() {
+  if (!els.draftBanner) return;
+  const draft = readDraft();
+  if (!draft) {
+    els.draftBanner.classList.add("hidden");
+    return;
+  }
+  const title = (draft.data && draft.data.title) || "(未填题名)";
+  if (els.draftWhen) els.draftWhen.textContent = `「${title}」`;
+  els.draftBanner.classList.remove("hidden");
+}
+
+async function postRecord(data, id) {
+  const res = await fetch(id ? `${API_URL}/${id}` : API_URL, {
+    method: id ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("保存失败", res.status, errText);
+    throw new Error(`HTTP ${res.status}${errText ? " " + errText : ""}`);
+  }
+  return res.json();
 }
 
 function showModal(modal) {
@@ -326,27 +388,28 @@ function addBetterRow(idea = "", code = "") {
   els.betterBox.appendChild(row);
 }
 
-function openForm(record) {
+function openForm(record, prefill) {
+  const source = prefill || record;
   editingId = record ? record.id : null;
   els.formTitle.textContent = record ? "编辑题目" : "添加题目";
-  formFields.platform.value = record && record.platform ? record.platform : "洛谷";
-  formFields.pid.value = record ? record.pid || "" : "";
+  formFields.platform.value = source && source.platform ? source.platform : "洛谷";
+  formFields.pid.value = source ? source.pid || "" : "";
   els.pidStatus.textContent = "";
   els.pidStatus.className = "pid-status";
-  formFields.title.value = record ? record.title || "" : "";
-  formFields.difficulty.value = record ? record.difficulty || "" : "";
-  formFields.date.value = record ? record.date || "" : todayStr();
-  formFields.status.value = record ? record.status || "已通过" : "已通过";
-  formFields.tags.value = record && record.tags ? record.tags.join(", ") : "";
-  formFields.codeText.value = record ? record.codeText || "" : "";
-  formFields.codePath.value = record ? record.codePath || "" : "";
-  formFields.description.value = record ? record.description || "" : "";
+  formFields.title.value = source ? source.title || "" : "";
+  formFields.difficulty.value = source ? source.difficulty || "" : "";
+  formFields.date.value = source ? source.date || "" : todayStr();
+  formFields.status.value = source ? source.status || "已通过" : "已通过";
+  formFields.tags.value = source && source.tags ? source.tags.join(", ") : "";
+  formFields.codeText.value = source ? source.codeText || "" : "";
+  formFields.codePath.value = source ? source.codePath || "" : "";
+  formFields.description.value = source ? source.description || "" : "";
   updateLuoguUI();
   els.notesBox.innerHTML = "";
-  const notes = record && record.notes && record.notes.length ? record.notes : [{ problem: "", solution: "" }];
+  const notes = source && source.notes && source.notes.length ? source.notes : [{ problem: "", solution: "" }];
   notes.forEach((n) => addNoteRow(n.problem, n.solution));
   els.betterBox.innerHTML = "";
-  const better = record && record.betterSolutions && record.betterSolutions.length ? record.betterSolutions : [{ idea: "", code: "" }];
+  const better = source && source.betterSolutions && source.betterSolutions.length ? source.betterSolutions : [{ idea: "", code: "" }];
   better.forEach((b) => addBetterRow(b.idea, b.code));
   showModal(els.modalForm);
   formFields.title.focus();
@@ -485,6 +548,34 @@ async function deleteRecord(id) {
 
 function bindEvents() {
   els.btnAdd.addEventListener("click", () => openForm(null));
+  if (els.draftRetry) {
+    els.draftRetry.addEventListener("click", async () => {
+      const draft = readDraft();
+      if (!draft) {
+        showDraftBanner();
+        return;
+      }
+      try {
+        await postRecord(draft.data, draft.id);
+        clearDraft();
+        if (!els.modalForm.classList.contains("hidden")) closeModal(els.modalForm);
+        showToast("已重新保存成功 ✓");
+        await refresh();
+      } catch (err) {
+        showToast(`⚠️ 还是没成功：${err.message || "请确认程序窗口还在运行"}`, 8000, true);
+      }
+    });
+    els.draftRestore.addEventListener("click", () => {
+      const draft = readDraft();
+      if (!draft) return;
+      openForm(draft.id ? { id: draft.id } : null, draft.data);
+    });
+    els.draftDiscard.addEventListener("click", () => {
+      if (!confirm("确定丢弃这条没保存成功的记录吗？")) return;
+      clearDraft();
+      showToast("已丢弃");
+    });
+  }
   els.search.addEventListener("input", () => {
     state.filters.keyword = els.search.value.trim();
     renderList();
@@ -551,24 +642,17 @@ function bindEvents() {
       formFields.title.focus();
       return;
     }
-    const url = editingId ? `${API_URL}/${editingId}` : API_URL;
-    const method = editingId ? "PUT" : "POST";
+    const targetId = editingId;
     try {
-      const res = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error("保存失败", res.status, errText);
-        throw new Error(errText || "save failed");
-      }
+      await postRecord(data, targetId);
+      clearDraft();
       closeModal(els.modalForm);
-      showToast(editingId ? "已保存修改 ✓" : "添加成功 ✓");
+      showToast(targetId ? "已保存修改 ✓" : "添加成功 ✓");
       await refresh();
     } catch (err) {
-      showToast("保存失败：" + (err.message || "请重试"));
+      writeDraft(data, targetId, err.message);
+      showDraftBanner();
+      showToast(`⚠️ 保存失败：${err.message || "请重试"}（内容已暂存在本机，可点上方提示条重试）`, 8000, true);
     }
   });
   document.querySelectorAll("[data-close]").forEach((el) =>
@@ -650,5 +734,6 @@ if (location.protocol === "file:") {
   document.getElementById("file-guard").classList.remove("hidden");
 } else {
   bindEvents();
+  showDraftBanner();
   refresh();
 }

@@ -33,10 +33,22 @@ def _get_data_dir():
 DATA_DIR = _get_data_dir()
 DATA_FILE = DATA_DIR / "data.json"
 IMAGES_DIR = DATA_DIR / "images"
+LOG_FILE = DATA_DIR / "server.log"
 
 
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def log_event(message):
+    """把关键事件追加写入 server.log，方便事后排查；失败时静默忽略。"""
+    try:
+        _ensure_data_dir()
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(LOG_FILE, "a", encoding="utf-8") as file:
+            file.write(f"[{stamp}] {message}\n")
+    except OSError:
+        pass
 
 
 def _migrate_data_file():
@@ -81,6 +93,11 @@ def load_records():
 
 def save_records(records):
     _ensure_data_dir()
+    if DATA_FILE.exists():
+        try:
+            DATA_FILE.with_name(DATA_FILE.name + ".bak").write_bytes(DATA_FILE.read_bytes())
+        except OSError:
+            pass
     tmp_file = DATA_FILE.with_name(DATA_FILE.name + ".tmp")
     with open(tmp_file, "w", encoding="utf-8") as file:
         json.dump(records, file, ensure_ascii=False, indent=2)
@@ -261,6 +278,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             super().handle()
         except Exception as exc:
+            log_event(f"{getattr(self, 'command', '?')} {getattr(self, 'path', '?')} 处理出错：{exc}")
             try:
                 body = json.dumps({"error": "internal_error", "message": str(exc)}, ensure_ascii=False).encode("utf-8")
                 self.send_response(500)
@@ -271,7 +289,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _log_api(self, code):
+        path = getattr(self, "path", "")
+        if path.startswith("/api/"):
+            log_event(f"{getattr(self, 'command', '?')} {path} -> {code}")
+
     def _send_json(self, data, code=200):
+        self._log_api(code)
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -373,6 +397,7 @@ class Handler(BaseHTTPRequestHandler):
             record["updatedAt"] = record["createdAt"]
             records.append(record)
             save_records(records)
+            log_event(f"写入新记录：id={record['id']} 题名={record['title']!r}")
         self._send_json(record, 201)
 
     def do_PUT(self):
@@ -400,6 +425,7 @@ class Handler(BaseHTTPRequestHandler):
             updated["updatedAt"] = now_str()
             records[index] = updated
             save_records(records)
+            log_event(f"更新记录：id={record_id} 题名={updated['title']!r}")
         self._send_json(updated)
 
     def do_DELETE(self):
@@ -416,6 +442,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "not found"}, 404)
                 return
             save_records(remaining)
+            log_event(f"删除记录：id={record_id}")
         self._send_json({"ok": True})
 
 
@@ -430,6 +457,24 @@ def pick_port(host):
     return None
 
 
+def _start_server(host, port):
+    """绑定端口；若端口被占用则自动换到 8765-8775 里的空闲端口。"""
+    try:
+        return port, ThreadingHTTPServer((host, port), Handler)
+    except OSError:
+        print(f"端口 {port} 已被占用（可能是上一次的程序还没关，或者别的程序占用了它）。")
+    fallback = pick_port(host)
+    if fallback is None:
+        print("8765-8775 端口都被占用了，请关闭其它程序后重试。")
+        return None, None
+    print(f"自动改用端口 {fallback} 启动。")
+    try:
+        return fallback, ThreadingHTTPServer((host, fallback), Handler)
+    except OSError as exc:
+        print(f"无法在端口 {fallback} 上启动：{exc}")
+        return None, None
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -442,13 +487,20 @@ def main():
     else:
         port = pick_port(host)
         if port is None:
-            print("No free port found in 8765-8775.")
+            print("8765-8775 端口都被占用了，请关闭其它程序后重试。")
             return
-    server = ThreadingHTTPServer((host, port), Handler)
-    url = f"http://{host}:{port}"
-    print(f"Server running at {url}  (Ctrl+C to stop)")
-    if host == "127.0.0.1" and "--no-browser" not in sys.argv:
-        threading.Timer(0.5, webbrowser.open, args=(f"http://127.0.0.1:{port}",)).start()
+    port, server = _start_server(host, port)
+    if server is None:
+        return
+    local_url = f"http://127.0.0.1:{port}"
+    print(f"服务已启动：{local_url}  (Ctrl+C 停止)")
+    print(f"数据文件：{DATA_FILE}")
+    print(f"运行日志：{LOG_FILE}")
+    if host not in ("127.0.0.1", "localhost"):
+        print(f"局域网访问：http://{socket.gethostname()}:{port}")
+    print("（这个窗口不要关，关掉就等于关掉了程序）")
+    if "--no-browser" not in sys.argv:
+        threading.Timer(0.5, webbrowser.open, args=(local_url,)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
