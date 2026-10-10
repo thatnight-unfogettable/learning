@@ -209,7 +209,18 @@ textarea { resize: vertical; line-height: 1.6; }
 .draft-banner .draft-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .toast.err { background: var(--red); }
 
+/* 网页版（数据存在浏览器里）时的提示条 */
+.storage-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  margin: 16px 0 0; padding: 10px 16px;
+  background: var(--blue-weak); border: 1px solid #cfdefb; color: #1d4ed8;
+  border-radius: 12px; font-size: 13.5px;
+}
+.storage-bar .storage-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
 @media (max-width: 640px) {
   .draft-banner { flex-direction: column; align-items: stretch; }
   .draft-banner .draft-actions { justify-content: flex-end; }
+  .storage-bar { flex-direction: column; align-items: stretch; }
+  .storage-bar .storage-actions { justify-content: flex-end; }
 }

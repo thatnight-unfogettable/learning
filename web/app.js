@@ -10,6 +10,8 @@ const state = {
 let editingId = null;
 let toastTimer = null;
 const DRAFT_KEY = "shuati.draft";
+const STORAGE_MODE_KEY = "shuati.storageMode";
+const RECORDS_KEY = "shuati.records";
 
 const els = {
   stats: document.getElementById("stats"),
@@ -131,7 +133,235 @@ function showDraftBanner() {
   els.draftBanner.classList.remove("hidden");
 }
 
+/* ---------- 存储模式 ----------
+   server  = 本机程序（或自建后端）保存到 data.json
+   browser = 纯网页部署时，数据保存在当前浏览器里（换设备前请导出备份）
+   默认：本机 / 局域网地址用 server，其它域名（如 Vercel）用 browser；
+   可在地址后加 ?storage=server 或 ?storage=browser 强制切换。 */
+
+function isPrivateHost(host) {
+  const h = String(host || "").toLowerCase();
+  if (!h) return false;
+  if (["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"].includes(h)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  return h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".internal") || h.endsWith(".home.arpa");
+}
+
+function applyStorageOverrideFromUrl() {
+  try {
+    const value = new URLSearchParams(location.search).get("storage");
+    if (value === "server" || value === "browser") localStorage.setItem(STORAGE_MODE_KEY, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+function resolveStorageMode() {
+  try {
+    const override = localStorage.getItem(STORAGE_MODE_KEY);
+    if (override === "server" || override === "browser") return override;
+  } catch {
+    /* ignore */
+  }
+  if (location.protocol === "http:" || location.protocol === "https:") {
+    return isPrivateHost(location.hostname) ? "server" : "browser";
+  }
+  return "browser";
+}
+
+applyStorageOverrideFromUrl();
+const storage = { mode: resolveStorageMode() };
+
+function nowStr() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function normalizeRecord(data) {
+  const source = data || {};
+  const tags = source.tags || [];
+  const notes = source.notes || [];
+  const better = source.betterSolutions || [];
+  return {
+    platform: String(source.platform || "洛谷").trim(),
+    pid: String(source.pid || "").trim(),
+    title: String(source.title || "").trim(),
+    difficulty: String(source.difficulty || "").trim(),
+    tags: tags.map((tag) => String(tag).trim()).filter(Boolean),
+    date: String(source.date || "").trim(),
+    status: String(source.status || "已通过").trim(),
+    description: String(source.description || ""),
+    codeText: String(source.codeText || ""),
+    codePath: String(source.codePath || "").trim(),
+    notes: notes
+      .filter((n) => n && (String(n.problem || "").trim() || String(n.solution || "").trim()))
+      .map((n) => ({ problem: String(n.problem || ""), solution: String(n.solution || "") })),
+    betterSolutions: better
+      .filter((b) => b && (String(b.idea || "").trim() || String(b.code || "").trim()))
+      .map((b) => ({ idea: String(b.idea || ""), code: String(b.code || "") })),
+  };
+}
+
+function loadBrowserRecords() {
+  try {
+    const raw = localStorage.getItem(RECORDS_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((r) => r && typeof r === "object") : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistBrowserRecords(records) {
+  try {
+    localStorage.setItem(RECORDS_KEY, JSON.stringify(records));
+  } catch (err) {
+    const quota = err && (err.name === "QuotaExceededError" || err.name === "NS_ERROR_DOM_QUOTA_REACHED" || err.code === 22);
+    throw new Error(
+      quota
+        ? "浏览器存储空间不足：请先点下方「导出备份」，再删掉一些带大图的旧记录"
+        : `浏览器本地保存失败：${(err && err.message) || err}`
+    );
+  }
+}
+
+function saveBrowserRecord(data, id) {
+  const records = loadBrowserRecords();
+  const record = normalizeRecord(data);
+  if (id) {
+    const index = records.findIndex((r) => Number(r.id) === Number(id));
+    if (index === -1) throw new Error("这条记录不存在（可能已被删除）");
+    record.id = records[index].id;
+    record.createdAt = records[index].createdAt || nowStr();
+    record.updatedAt = nowStr();
+    records[index] = record;
+  } else {
+    record.id = records.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0) + 1;
+    record.createdAt = nowStr();
+    record.updatedAt = record.createdAt;
+    records.push(record);
+  }
+  persistBrowserRecords(records);
+  return record;
+}
+
+function deleteBrowserRecord(id) {
+  const remaining = loadBrowserRecords().filter((r) => Number(r.id) !== Number(id));
+  persistBrowserRecords(remaining);
+}
+
+function exportBackup() {
+  const records = loadBrowserRecords();
+  const stamp = nowStr().replace(/[-:]/g, "").replace(" ", "-");
+  const blob = new Blob([JSON.stringify(records, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `刷题记录本-备份-${stamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+  showToast("已导出备份 ✓");
+}
+
+function importBackup(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(String(reader.result || ""));
+      if (!Array.isArray(parsed)) throw new Error("文件内容不是记录列表");
+      const cleaned = [];
+      const usedIds = new Set();
+      let maxId = 0;
+      parsed.forEach((item) => {
+        if (!item || typeof item !== "object") return;
+        const record = normalizeRecord(item);
+        const id = Number(item.id);
+        if (Number.isInteger(id) && id > 0 && !usedIds.has(id)) {
+          record.id = id;
+          usedIds.add(id);
+          maxId = Math.max(maxId, id);
+        } else {
+          record.id = 0;
+        }
+        record.createdAt = typeof item.createdAt === "string" && item.createdAt ? item.createdAt : nowStr();
+        record.updatedAt = typeof item.updatedAt === "string" && item.updatedAt ? item.updatedAt : record.createdAt;
+        cleaned.push(record);
+      });
+      cleaned.forEach((record) => {
+        if (!record.id) {
+          maxId += 1;
+          record.id = maxId;
+        }
+      });
+      if (!confirm(`导入将用备份里的 ${cleaned.length} 条记录，覆盖当前的全部 ${state.records.length} 条记录。确定继续吗？`)) return;
+      persistBrowserRecords(cleaned);
+      state.records = cleaned;
+      render();
+      showToast("导入成功 ✓");
+    } catch (err) {
+      showToast(`导入失败：${(err && err.message) || "文件无法解析"}`, 6000, true);
+    }
+  };
+  reader.onerror = () => showToast("读取文件失败", 6000, true);
+  reader.readAsText(file, "utf-8");
+}
+
+function compressImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const maxSide = 1600;
+        const wide = Math.max(img.naturalWidth, img.naturalHeight);
+        const scale = wide > maxSide ? maxSide / wide : 1;
+        if (scale === 1 && dataUrl.length < 600000) {
+          resolve(dataUrl);
+          return;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const jpeg = canvas.toDataURL("image/jpeg", 0.85);
+        resolve(jpeg.length < dataUrl.length ? jpeg : dataUrl);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.onerror = () => reject(new Error("无法读取图片"));
+    img.src = dataUrl;
+  });
+}
+
+function setupBrowserModeUI() {
+  const bar = document.getElementById("storage-bar");
+  if (bar) bar.classList.remove("hidden");
+  const btnExport = document.getElementById("btn-export");
+  const btnImport = document.getElementById("btn-import");
+  const fileInput = document.getElementById("f-import-file");
+  if (btnExport) btnExport.addEventListener("click", exportBackup);
+  if (btnImport && fileInput) {
+    btnImport.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) importBackup(file);
+      e.target.value = "";
+    });
+  }
+}
+
 async function postRecord(data, id) {
+  if (storage.mode === "browser") {
+    return saveBrowserRecord(data, id);
+  }
   const res = await fetch(id ? `${API_URL}/${id}` : API_URL, {
     method: id ? "PUT" : "POST",
     headers: { "Content-Type": "application/json" },
@@ -156,6 +386,11 @@ function closeModal(modal) {
 }
 
 async function refresh() {
+  if (storage.mode === "browser") {
+    state.records = loadBrowserRecords();
+    render();
+    return;
+  }
   const res = await fetch(API_URL);
   state.records = await res.json();
   render();
@@ -451,8 +686,13 @@ function isLuoguPlatform() {
 
 function updateLuoguUI() {
   const luogu = isLuoguPlatform();
-  if (els.btnFetchLuogu) els.btnFetchLuogu.style.display = luogu ? "" : "none";
-  formFields.pid.placeholder = luogu ? "如 P1085，输入后自动获取题名" : "题号（选填）";
+  const canFetch = storage.mode === "server";
+  if (els.btnFetchLuogu) els.btnFetchLuogu.style.display = luogu && canFetch ? "" : "none";
+  formFields.pid.placeholder = luogu
+    ? canFetch
+      ? "如 P1085，输入后自动获取题名"
+      : "如 P1085（网页版需手动填写题名）"
+    : "题号（选填）";
   if (!luogu) {
     els.pidStatus.textContent = "";
     els.pidStatus.className = "pid-status";
@@ -509,6 +749,11 @@ function parseLuoguPid(text) {
 let fetchingLuogu = false;
 
 async function fetchLuoguInfo(pid) {
+  if (storage.mode !== "server") {
+    els.pidStatus.textContent = "ℹ️ 当前是网页版，无法自动获取，请手动填写题名 / 难度";
+    els.pidStatus.className = "pid-status";
+    return;
+  }
   if (fetchingLuogu) return;
   fetchingLuogu = true;
   els.pidStatus.textContent = "🔄 正在从洛谷获取…";
@@ -537,8 +782,12 @@ async function deleteRecord(id) {
   if (!r) return;
   if (!confirm(`确定删除「${r.title || "未命名题目"}」吗？删除后无法恢复。`)) return;
   try {
-    const res = await fetch(`${API_URL}/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("delete failed");
+    if (storage.mode === "browser") {
+      deleteBrowserRecord(id);
+    } else {
+      const res = await fetch(`${API_URL}/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("delete failed");
+    }
     showToast("已删除");
     await refresh();
   } catch {
@@ -617,12 +866,12 @@ function bindEvents() {
     if (e.key === "Enter") {
       e.preventDefault();
       const pid = parseLuoguPid(formFields.pid.value);
-      if (pid && isLuoguPlatform()) fetchLuoguInfo(pid);
+      if (pid && isLuoguPlatform() && storage.mode === "server") fetchLuoguInfo(pid);
     }
   });
   formFields.pid.addEventListener("change", () => {
     const pid = parseLuoguPid(formFields.pid.value);
-    if (pid && !formFields.title.value.trim() && isLuoguPlatform()) fetchLuoguInfo(pid);
+    if (pid && !formFields.title.value.trim() && isLuoguPlatform() && storage.mode === "server") fetchLuoguInfo(pid);
   });
   els.list.addEventListener("click", (e) => {
     const card = e.target.closest(".rec");
@@ -650,6 +899,10 @@ function bindEvents() {
       showToast(targetId ? "已保存修改 ✓" : "添加成功 ✓");
       await refresh();
     } catch (err) {
+      if (storage.mode === "browser") {
+        showToast(`⚠️ 保存失败：${err.message || "请重试"}`, 8000, true);
+        return;
+      }
       writeDraft(data, targetId, err.message);
       showDraftBanner();
       showToast(`⚠️ 保存失败：${err.message || "请重试"}（内容已暂存在本机，可点上方提示条重试）`, 8000, true);
@@ -662,6 +915,15 @@ function bindEvents() {
     })
   );
   async function uploadImage(dataUrl, alt) {
+    if (storage.mode === "browser") {
+      try {
+        const localUrl = await compressImage(dataUrl);
+        insertImageMarkdown(localUrl, alt);
+      } catch {
+        insertImageMarkdown(dataUrl, alt);
+      }
+      return;
+    }
     try {
       const res = await fetch("/api/images", {
         method: "POST",
@@ -735,5 +997,6 @@ if (location.protocol === "file:") {
 } else {
   bindEvents();
   showDraftBanner();
+  if (storage.mode === "browser") setupBrowserModeUI();
   refresh();
 }
