@@ -23,7 +23,7 @@
 
   <main class="container">
     <div id="storage-bar" class="storage-bar hidden">
-      <div class="storage-text">💾 数据保存在<b>这台设备的浏览器</b>里：换电脑 / 手机或清理浏览器数据前，请先导出备份。</div>
+      <div class="storage-text" id="storage-text">💾 数据保存在<b>这台设备的浏览器</b>里：换电脑 / 手机或清理浏览器数据前，请先导出备份。</div>
       <div class="storage-actions">
         <button type="button" id="btn-export" class="btn btn-ghost btn-sm">导出备份</button>
         <button type="button" id="btn-import" class="btn btn-ghost btn-sm">导入备份</button>
@@ -47,6 +47,12 @@
         <option value="待重做">待重做</option>
       </select>
       <select id="f-tag"><option value="">全部标签</option></select>
+      <select id="sort" title="排序方式">
+        <option value="updated">最近更新</option>
+        <option value="date">刷题日期</option>
+        <option value="platform">平台</option>
+        <option value="pid">题号</option>
+      </select>
       <button id="btn-clear" class="btn btn-ghost" type="button">清空筛选</button>
     </section>
 

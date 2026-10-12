@@ -5,6 +5,7 @@ const API_URL = "/api/records";
 const state = {
   records: [],
   filters: { keyword: "", platform: "", status: "", tag: "" },
+  sort: "updated",
 };
 
 let editingId = null;
@@ -36,6 +37,14 @@ const els = {
   pidStatus: document.getElementById("pid-status"),
   btnInsertImage: document.getElementById("btn-insert-image"),
   descImageInput: document.getElementById("f-desc-image"),
+  draftBanner: document.getElementById("draft-banner"),
+  draftWhen: document.getElementById("draft-when"),
+  draftRetry: document.getElementById("draft-retry"),
+  draftRestore: document.getElementById("draft-restore"),
+  draftDiscard: document.getElementById("draft-discard"),
+  storageBar: document.getElementById("storage-bar"),
+  storageText: document.getElementById("storage-text"),
+  sortSelect: document.getElementById("sort"),
 };
 
 const formFields = {
@@ -49,11 +58,6 @@ const formFields = {
   codeText: document.getElementById("f-code"),
   codePath: document.getElementById("f-codepath"),
   description: document.getElementById("f-desc"),
-  draftBanner: document.getElementById("draft-banner"),
-  draftWhen: document.getElementById("draft-when"),
-  draftRetry: document.getElementById("draft-retry"),
-  draftRestore: document.getElementById("draft-restore"),
-  draftDiscard: document.getElementById("draft-discard"),
 };
 
 function esc(value) {
@@ -254,8 +258,15 @@ function deleteBrowserRecord(id) {
   persistBrowserRecords(remaining);
 }
 
-function exportBackup() {
-  const records = loadBrowserRecords();
+async function exportBackup() {
+  let records;
+  if (storage.mode === "browser") {
+    records = loadBrowserRecords();
+  } else {
+    const res = await fetch(API_URL);
+    if (!res.ok) throw new Error("读取记录失败，请确认程序窗口还在运行");
+    records = await res.json();
+  }
   const stamp = nowStr().replace(/[-:]/g, "").replace(" ", "-");
   const blob = new Blob([JSON.stringify(records, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
@@ -270,7 +281,7 @@ function exportBackup() {
 
 function importBackup(file) {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const parsed = JSON.parse(String(reader.result || ""));
       if (!Array.isArray(parsed)) throw new Error("文件内容不是记录列表");
@@ -298,11 +309,32 @@ function importBackup(file) {
           record.id = maxId;
         }
       });
-      if (!confirm(`导入将用备份里的 ${cleaned.length} 条记录，覆盖当前的全部 ${state.records.length} 条记录。确定继续吗？`)) return;
-      persistBrowserRecords(cleaned);
-      state.records = cleaned;
-      render();
-      showToast("导入成功 ✓");
+      if (storage.mode === "browser") {
+        if (!confirm(`导入将用备份里的 ${cleaned.length} 条记录，覆盖当前的全部 ${state.records.length} 条记录。确定继续吗？`)) return;
+        persistBrowserRecords(cleaned);
+        state.records = cleaned;
+        render();
+        showToast("导入成功 ✓");
+        return;
+      }
+      if (!confirm(`导入将把备份里的 ${cleaned.length} 条记录追加到本机 data.json（当前已有 ${state.records.length} 条）。确定继续吗？`)) return;
+      let okCount = 0;
+      for (const record of cleaned) {
+        const res = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(record),
+        });
+        if (res.ok) okCount += 1;
+      }
+      await refresh();
+      showToast(
+        okCount === cleaned.length
+          ? `已导入 ${okCount} 条记录 ✓`
+          : `导入完成：成功 ${okCount} 条，失败 ${cleaned.length - okCount} 条`,
+        6000,
+        okCount !== cleaned.length
+      );
     } catch (err) {
       showToast(`导入失败：${(err && err.message) || "文件无法解析"}`, 6000, true);
     }
@@ -341,13 +373,22 @@ function compressImage(dataUrl) {
   });
 }
 
-function setupBrowserModeUI() {
-  const bar = document.getElementById("storage-bar");
+function setupStorageBar() {
+  const bar = els.storageBar;
   if (bar) bar.classList.remove("hidden");
+  if (els.storageText) {
+    els.storageText.innerHTML =
+      storage.mode === "browser"
+        ? "💾 数据保存在<b>这台设备的浏览器</b>里：换电脑 / 手机或清理浏览器数据前，请先导出备份。"
+        : "💾 数据保存在<b>本机程序</b>的 data.json 里：可随时导出备份，或从备份文件追加导入。";
+  }
   const btnExport = document.getElementById("btn-export");
   const btnImport = document.getElementById("btn-import");
   const fileInput = document.getElementById("f-import-file");
-  if (btnExport) btnExport.addEventListener("click", exportBackup);
+  if (btnExport)
+    btnExport.addEventListener("click", () => {
+      exportBackup().catch((err) => showToast(`导出失败：${(err && err.message) || err}`, 6000, true));
+    });
   if (btnImport && fileInput) {
     btnImport.addEventListener("click", () => fileInput.click());
     fileInput.addEventListener("change", (e) => {
@@ -406,22 +447,32 @@ function render() {
 function renderStats() {
   const rs = state.records;
   const count = (fn) => rs.filter(fn).length;
+  const active = (key, value) => (state.filters[key] === value ? " active" : "");
   const chips = [
-    { label: "累计刷题", num: rs.length, cls: "" },
-    { label: "已通过", num: count((r) => r.status === "已通过"), cls: "green" },
-    { label: "进行中", num: count((r) => r.status === "进行中"), cls: "orange" },
-    { label: "待重做", num: count((r) => r.status === "待重做"), cls: "red" },
+    { label: "累计刷题", num: rs.length, cls: "clickable", clear: true },
+    { label: "已通过", num: count((r) => r.status === "已通过"), cls: `green clickable${active("status", "已通过")}`, status: "已通过" },
+    { label: "进行中", num: count((r) => r.status === "进行中"), cls: `orange clickable${active("status", "进行中")}`, status: "进行中" },
+    { label: "待重做", num: count((r) => r.status === "待重做"), cls: `red clickable${active("status", "待重做")}`, status: "待重做" },
   ];
   const platforms = [...new Set(rs.map((r) => r.platform).filter(Boolean))];
   platforms.slice(0, 4).forEach((p) => {
     const cls = p === "洛谷" ? "blue" : p === "Matrix" ? "purple" : "other";
-    chips.push({ label: p, num: count((r) => r.platform === p), cls });
+    chips.push({ label: p, num: count((r) => r.platform === p), cls: `${cls} clickable${active("platform", p)}`, platform: p });
   });
   if (platforms.length > 4) {
     chips.push({ label: "其他平台", num: count((r) => !platforms.slice(0, 4).includes(r.platform)), cls: "muted" });
   }
   els.stats.innerHTML = chips
-    .map((c) => `<div class="stat ${c.cls}"><div class="num">${c.num}</div><div class="label">${esc(c.label)}</div></div>`)
+    .map((c) => {
+      const data = c.clear
+        ? ' data-clear="1"'
+        : c.status
+          ? ` data-status="${esc(c.status)}"`
+          : c.platform
+            ? ` data-platform="${esc(c.platform)}"`
+            : "";
+      return `<div class="stat ${c.cls}"${data}><div class="num">${c.num}</div><div class="label">${esc(c.label)}</div></div>`;
+    })
     .join("");
 }
 
@@ -457,6 +508,7 @@ function matchRecord(r) {
     const hay = [
       r.title,
       r.pid,
+      r.date,
       r.difficulty,
       r.platform,
       (r.tags || []).join(" "),
@@ -474,9 +526,18 @@ function matchRecord(r) {
 }
 
 function filteredRecords() {
-  return state.records
-    .filter(matchRecord)
-    .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+  const list = state.records.filter(matchRecord);
+  const byTime = (a, b) =>
+    String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""));
+  const sorts = {
+    updated: byTime,
+    date: (a, b) => String(b.date || "").localeCompare(String(a.date || "")) || byTime(a, b),
+    platform: (a, b) =>
+      String(a.platform || "").localeCompare(String(b.platform || ""), "zh") || byTime(a, b),
+    pid: (a, b) =>
+      String(a.pid || "").localeCompare(String(b.pid || ""), "zh", { numeric: true }) || byTime(a, b),
+  };
+  return list.sort(sorts[state.sort] || byTime);
 }
 
 function cardHtml(r) {
@@ -559,7 +620,10 @@ function viewRecord(id) {
   els.viewBody.innerHTML = `
     <div class="view-head">
       <h2>${esc(r.title || "(未填题名)")}</h2>
-      ${statusBadge(r.status)}
+      <div class="view-head-actions">
+        ${statusBadge(r.status)}
+        <button type="button" class="btn btn-primary btn-sm" data-edit="${r.id}">✏️ 编辑</button>
+      </div>
     </div>
     <div class="view-meta">${meta
       .filter(([, v]) => v)
@@ -777,6 +841,20 @@ async function fetchLuoguInfo(pid) {
   }
 }
 
+function resetFilters() {
+  Object.assign(state.filters, { keyword: "", platform: "", status: "", tag: "" });
+  syncFilterUI();
+  renderStats();
+  renderList();
+}
+
+function syncFilterUI() {
+  els.search.value = state.filters.keyword;
+  els.filterPlatform.value = state.filters.platform;
+  els.filterStatus.value = state.filters.status;
+  els.filterTag.value = state.filters.tag;
+}
+
 async function deleteRecord(id) {
   const r = findRecord(id);
   if (!r) return;
@@ -841,13 +919,34 @@ function bindEvents() {
     state.filters.tag = els.filterTag.value;
     renderList();
   });
-  els.btnClear.addEventListener("click", () => {
-    els.search.value = "";
-    els.filterPlatform.value = "";
-    els.filterStatus.value = "";
-    els.filterTag.value = "";
-    Object.assign(state.filters, { keyword: "", platform: "", status: "", tag: "" });
+  els.btnClear.addEventListener("click", resetFilters);
+  if (els.sortSelect)
+    els.sortSelect.addEventListener("change", () => {
+      state.sort = els.sortSelect.value;
+      renderList();
+    });
+  els.stats.addEventListener("click", (e) => {
+    const chip = e.target.closest(".stat[data-status], .stat[data-platform], .stat[data-clear]");
+    if (!chip) return;
+    if (chip.dataset.clear !== undefined) {
+      resetFilters();
+      return;
+    }
+    const key = chip.dataset.status !== undefined ? "status" : "platform";
+    const value = chip.dataset[key];
+    if (state.filters[key] === value) state.filters[key] = "";
+    else state.filters[key] = value;
+    syncFilterUI();
+    renderStats();
     renderList();
+  });
+  els.viewBody.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-edit]");
+    if (!btn) return;
+    const rec = findRecord(Number(btn.dataset.edit));
+    if (!rec) return;
+    closeModal(els.modalView);
+    openForm(rec);
   });
   els.btnAddNote.addEventListener("click", () => addNoteRow());
   els.btnAddBetter.addEventListener("click", () => addBetterRow());
@@ -997,6 +1096,6 @@ if (location.protocol === "file:") {
 } else {
   bindEvents();
   showDraftBanner();
-  if (storage.mode === "browser") setupBrowserModeUI();
+  setupStorageBar();
   refresh();
 }
